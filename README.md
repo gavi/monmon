@@ -15,36 +15,63 @@ cores, GPU, and the Neural Engine (NPU) — plus the top processes driving load.
 ## Requirements
 
 - macOS on Apple Silicon (M1 or newer)
-- Python 3.12+
-- [uv](https://github.com/astral-sh/uv)
-- `sudo` access (Apple's `powermetrics` requires root)
+- `sudo` access — Apple's `powermetrics` requires root
+- Homebrew (for the recommended install path) or Python 3.12+ and
+  [uv](https://github.com/astral-sh/uv) (for the source path)
 
-## Install / run
+## Install
 
-### Homebrew (recommended for users)
+### Homebrew (recommended)
 
 ```sh
 brew install gavi/monmon/monmon
-monmon
 ```
+
+That's a shorthand for `brew tap gavi/monmon && brew install monmon`. It
+pulls the formula from [`gavi/homebrew-monmon`][tap], creates an isolated
+Python 3.12 virtualenv in `$(brew --prefix)/opt/monmon/libexec`, installs
+all dependencies pinned to exact versions, and puts `monmon` on your `$PATH`.
+
+[tap]: https://github.com/gavi/homebrew-monmon
 
 ### From source (for development)
 
 ```sh
+git clone https://github.com/gavi/monmon.git
+cd monmon
 uv sync
 uv run monmon
 ```
 
-You'll be prompted for your password once — `sudo` caches it for the session
-and `powermetrics` is spawned under `sudo -n` so it never blocks the TUI.
-
-Optional flags:
+## Run
 
 ```sh
-uv run monmon --interval 500   # 500 ms samples (default: 1000)
+monmon                 # 1 s sample interval
+monmon --interval 500  # 500 ms samples — snappier, more CPU overhead
+monmon --help
+```
+
+The first time you launch, macOS prompts for your password so `sudo` can
+start `powermetrics`. The credential is cached for the session, so subsequent
+runs in the same shell skip the prompt.
+
+If the in-TUI password prompt fails (common on TouchID-only setups where
+subprocess sudo can't trigger the biometric dialog), cache your credential
+in the shell first:
+
+```sh
+sudo -v && monmon
 ```
 
 Quit with `q` or `ctrl-c`.
+
+## Upgrade / uninstall
+
+```sh
+brew update && brew upgrade monmon    # pull in new releases
+brew uninstall monmon                  # remove
+brew untap gavi/monmon                 # drop the tap too
+```
 
 ## What you see
 
