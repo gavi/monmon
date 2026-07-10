@@ -63,13 +63,22 @@ def _freq_mhz(v: float | int | None) -> float:
     return v if v < 1e5 else v / 1e6
 
 
-def _active_from_idle(idle: float | int | None) -> float:
-    if idle is None:
+def _active_ratio(entry: dict) -> float:
+    """Active residency: time neither idle nor powered down.
+
+    macOS 27 reports power-gated time as `down_ratio`, which `idle_ratio`
+    does NOT include — a fully gated core reads idle=0/down=1 and would
+    look 100% active if we only subtracted idle.
+    """
+    idle = entry.get("idle_ratio")
+    down = entry.get("down_ratio")
+    if idle is None and down is None:
         return 0.0
     try:
-        return max(0.0, min(1.0, 1.0 - float(idle)))
+        total = float(idle or 0.0) + float(down or 0.0)
     except (TypeError, ValueError):
         return 0.0
+    return max(0.0, min(1.0, 1.0 - total))
 
 
 def _cluster_kind(name: str) -> str:
@@ -93,7 +102,7 @@ def parse_sample(plist_bytes: bytes) -> PowerSample:
             CoreSample(
                 cpu_id=int(cpu.get("cpu", -1)),
                 freq_mhz=_freq_mhz(cpu.get("freq_hz")),
-                active=_active_from_idle(cpu.get("idle_ratio")),
+                active=_active_ratio(cpu),
             )
             for cpu in (c.get("cpus") or [])
         ]
@@ -102,7 +111,7 @@ def parse_sample(plist_bytes: bytes) -> PowerSample:
         if cores:
             active = sum(core.active for core in cores) / len(cores)
         else:
-            active = _active_from_idle(c.get("idle_ratio"))
+            active = _active_ratio(c)
         clusters.append(
             ClusterSample(
                 name=name,
@@ -115,7 +124,7 @@ def parse_sample(plist_bytes: bytes) -> PowerSample:
 
     gpu = doc.get("gpu", {}) or {}
     gpu_freq = _freq_mhz(gpu.get("freq_hz"))
-    gpu_active = _active_from_idle(gpu.get("idle_ratio"))
+    gpu_active = _active_ratio(gpu)
 
     elapsed_ns = int(doc.get("elapsed_ns", 0) or 0)
 

@@ -34,21 +34,26 @@ def _prime() -> None:
     _primed = True
 
 
-def snapshot(limit: int = 20, by: str = "cpu") -> list[ProcInfo]:
-    """Top `limit` processes sorted by `by` ("cpu" or "mem"), descending."""
+def snapshot(limit: int = 20, by: str = "cpu", contains: str = "") -> list[ProcInfo]:
+    """Top `limit` processes sorted by `by` ("cpu" or "mem"), descending,
+    optionally filtered by case-insensitive name substring."""
     if not _primed:
         _prime()
         return []
 
+    needle = contains.lower()
     rows: list[ProcInfo] = []
     for p in psutil.process_iter(["pid", "name", "memory_info"]):
         try:
             cpu = p.cpu_percent(None)
+            name = p.info["name"] or "?"
+            if needle and needle not in name.lower():
+                continue
             mem = p.info["memory_info"]
             rows.append(
                 ProcInfo(
                     pid=p.info["pid"],
-                    name=p.info["name"] or "?",
+                    name=name,
                     cpu_percent=cpu,
                     mem_mb=(mem.rss / (1024 * 1024)) if mem else 0.0,
                 )

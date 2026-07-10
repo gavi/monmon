@@ -4,8 +4,10 @@ A terminal UI for watching Apple Silicon work: efficiency cores, performance
 cores, GPU, and the Neural Engine (NPU) — plus the top processes driving load.
 
 <p align="center">
-  <img src="docs/screenshot.png" alt="monmon TUI showing E-cores, P-cores, GPU, ANE, and a live process table" width="900">
+  <img src="docs/demo.gif" alt="monmon demo — live E/P cores, GPU, ANE, memory, sorting, filtering, and help" width="900">
 </p>
+
+<p align="center"><sub>Live demo (sort · filter · help). Static version: <a href="docs/screenshot.png">screenshot</a>.</sub></p>
 
 > **One-shot build note**: this entire project was generated in a single pass
 > by **Claude Opus 4.7 (1M context)** running in Claude Code, from the prompt
@@ -26,6 +28,9 @@ cores, GPU, and the Neural Engine (NPU) — plus the top processes driving load.
 ```sh
 brew install gavi/monmon/monmon
 ```
+
+> **Homebrew 6+** requires trusting third-party taps once before installing
+> or upgrading from them: `brew trust gavi/monmon`
 
 That's a shorthand for `brew tap gavi/monmon && brew install monmon`. It
 pulls the formula from [`gavi/homebrew-monmon`][tap], creates an isolated
@@ -75,8 +80,18 @@ in the shell first:
 sudo -v && monmon
 ```
 
-Keys: `s` toggles the process table between CPU and memory sort; `q` or
-`ctrl-c` quits.
+Keys:
+
+| key | action |
+|-----|--------|
+| `s` | sort process table by CPU / memory |
+| `/` | filter processes by name (`esc` clears) |
+| `k` | kill the selected process (asks first) |
+| `p` | pause / resume sampling |
+| `?` | help |
+| `q` | quit |
+
+The layout stacks vertically on terminals narrower than 100 columns.
 
 ### Optional: skip the password prompt
 

@@ -8,11 +8,13 @@ from types import SimpleNamespace
 import pytest
 from rich.console import Console
 from textual.app import App, ComposeResult
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Input
 
 from monmon.app import (
     AnePanel,
+    ConfirmKillScreen,
     CpuPanel,
+    HelpScreen,
     History,
     MemPanel,
     MonMonApp,
@@ -181,6 +183,98 @@ async def test_fake_sample_flows_to_panels_and_history() -> None:
         # a 12 W draw must raise the ceiling above the 8 W default
         assert app._ane_ceiling_mw == 12_000.0
         assert app.query_one("#ane", AnePanel).ceiling_mw == 12_000.0
+
+
+def hermetic_app() -> MonMonApp:
+    """MonMonApp with the real powermetrics stream kept out."""
+    app = MonMonApp(interval_ms=1000)
+    app.reader.start = lambda: None  # type: ignore[method-assign]
+    return app
+
+
+@pytest.mark.skipif(shutil.which("powermetrics") is None, reason="needs macOS powermetrics")
+async def test_pause_freezes_updates() -> None:
+    app = hermetic_app()
+    async with app.run_test() as pilot:
+        app.reader.samples.put_nowait(make_sample())
+        await pilot.pause(1.3)
+        assert len(app.history.cpu_active) == 1
+
+        await pilot.press("p")
+        assert app._paused
+        assert app.query_one("#summary", SummaryBar).paused
+        app.reader.samples.put_nowait(make_sample())
+        await pilot.pause(1.3)
+        assert len(app.history.cpu_active) == 1, "history must freeze while paused"
+
+        await pilot.press("p")
+        app.reader.samples.put_nowait(make_sample())
+        await pilot.pause(1.3)
+        assert len(app.history.cpu_active) == 2
+
+
+@pytest.mark.skipif(shutil.which("powermetrics") is None, reason="needs macOS powermetrics")
+async def test_filter_show_type_clear() -> None:
+    app = hermetic_app()
+    async with app.run_test() as pilot:
+        panel = app.query_one("#proc", ProcPanel)
+        inp = panel.query_one("#proc-filter", Input)
+        assert not inp.display
+
+        await pilot.press("slash")
+        assert inp.display
+        assert inp.has_focus
+        await pilot.press("x", "y")
+        assert panel.filter_text == "xy"
+
+        await pilot.press("escape")
+        assert not inp.display
+        assert panel.filter_text == ""
+
+
+@pytest.mark.skipif(shutil.which("powermetrics") is None, reason="needs macOS powermetrics")
+async def test_help_screen_opens_and_closes() -> None:
+    app = hermetic_app()
+    async with app.run_test() as pilot:
+        await pilot.press("question_mark")
+        assert isinstance(app.screen, HelpScreen)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, HelpScreen)
+
+
+@pytest.mark.skipif(shutil.which("powermetrics") is None, reason="needs macOS powermetrics")
+async def test_kill_asks_and_handles_gone_pid() -> None:
+    app = hermetic_app()
+    async with app.run_test() as pilot:
+        await pilot.press("p")  # freeze polling so the fake row stays put
+        panel = app.query_one("#proc", ProcPanel)
+        panel.update_rows([ProcInfo(pid=99_999_999, name="ghost", cpu_percent=1.0, mem_mb=1.0)])
+        await pilot.pause()
+
+        await pilot.press("k")
+        assert isinstance(app.screen, ConfirmKillScreen)
+        await pilot.press("n")
+        await pilot.pause()
+        assert not isinstance(app.screen, ConfirmKillScreen)
+
+        await pilot.press("k")
+        assert isinstance(app.screen, ConfirmKillScreen)
+        await pilot.press("y")  # pid doesn't exist -> "already exited" path, no crash
+        await pilot.pause()
+        assert not isinstance(app.screen, ConfirmKillScreen)
+
+
+@pytest.mark.skipif(shutil.which("powermetrics") is None, reason="needs macOS powermetrics")
+async def test_horizontal_breakpoints() -> None:
+    app = hermetic_app()
+    async with app.run_test(size=(80, 40)) as pilot:
+        await pilot.pause()
+        assert app.screen.has_class("-narrow")
+    app2 = hermetic_app()
+    async with app2.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        assert app2.screen.has_class("-wide")
 
 
 @pytest.mark.skipif(not can_run_powermetrics(), reason="needs passwordless powermetrics")

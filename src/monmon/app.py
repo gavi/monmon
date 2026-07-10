@@ -12,11 +12,14 @@ from rich.console import Group
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.message import Message
 from textual.reactive import reactive
-from textual.widgets import DataTable, Footer, Header, Static
+from textual.screen import ModalScreen
+from textual.widgets import DataTable, Footer, Header, Input, Static
 from textual.widgets.data_table import CellDoesNotExist
 
 from .power import (
@@ -122,16 +125,18 @@ class CpuPanel(Static):
 
         groups: list = []
         for cluster in self.sample.clusters:
+            groups.append(
+                Text.from_markup(
+                    f"  {cluster_label(cluster)} · avg {cluster.active * 100:5.1f}%"
+                    f"  @ {fmt_mhz(cluster.freq_mhz)}",
+                    overflow="ellipsis",
+                )
+            )
             t = Table.grid(padding=(0, 1))
             t.add_column(justify="right", style="dim", min_width=6)
             t.add_column(min_width=22)
             t.add_column(justify="right", min_width=8)
             t.add_column(justify="right", style="dim", min_width=9)
-
-            header = Text.from_markup(
-                f"{cluster_label(cluster)} · avg {cluster.active * 100:5.1f}%  @ {fmt_mhz(cluster.freq_mhz)}"
-            )
-            t.add_row("", header, "", "")
             for core in cluster.cores:
                 t.add_row(
                     f"cpu{core.cpu_id}",
@@ -212,6 +217,7 @@ class AnePanel(Static):
 class SummaryBar(Static):
     sample: reactive[PowerSample | None] = reactive(None)
     stream_alive: reactive[bool] = reactive(True)
+    paused: reactive[bool] = reactive(False)
 
     def __init__(self, history: History, id: str | None = None) -> None:
         super().__init__(id=id)
@@ -230,6 +236,8 @@ class SummaryBar(Static):
             if peak > 0:
                 left.append("  ")
                 left.append_text(spark((v / peak for v in self.history.package_mw), 20, style="yellow"))
+        if self.paused:
+            left.append("  ⏸ paused", style="bold yellow")
         if not self.stream_alive:
             left.append("  powermetrics ended — quit and rerun: sudo -v && monmon", style="bold red")
         return left
@@ -266,13 +274,96 @@ class MemPanel(Static):
         return Panel(t, title="Memory", border_style="yellow")
 
 
+HELP_TEXT = """\
+[bold]monmon keys[/bold]
+
+  [bold cyan]s[/]  sort process table by cpu / mem
+  [bold cyan]/[/]  filter processes by name (esc clears)
+  [bold cyan]k[/]  kill the selected process (asks first)
+  [bold cyan]p[/]  pause / resume sampling
+  [bold cyan]?[/]  this help
+  [bold cyan]q[/]  quit
+
+[dim]Data: powermetrics (CPU / GPU / ANE) + psutil (processes, memory).
+The ANE bar scales to an 8 W ceiling that self-calibrates to the
+session's peak draw.[/dim]"""
+
+
+class HelpScreen(ModalScreen):
+    BINDINGS = [
+        Binding("escape", "close", "Close"),
+        Binding("q", "close", "Close", show=False),
+        Binding("question_mark", "close", "Close", show=False),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Static(HELP_TEXT, id="help-body")
+
+    def action_close(self) -> None:
+        self.app.pop_screen()
+
+
+class ConfirmKillScreen(ModalScreen[bool]):
+    BINDINGS = [
+        Binding("y", "confirm", "Yes"),
+        Binding("n,escape", "cancel", "No"),
+    ]
+
+    def __init__(self, pid: int, proc_name: str) -> None:
+        super().__init__()
+        self.pid = pid
+        self.proc_name = proc_name
+
+    def compose(self) -> ComposeResult:
+        yield Static(
+            f"Kill [bold]{self.proc_name}[/] (pid {self.pid})?   [bold green]y[/] / [bold red]n[/]",
+            id="confirm-body",
+        )
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
 class ProcPanel(Static):
+    class FilterChanged(Message):
+        pass
+
     def __init__(self, id: str | None = None) -> None:
         super().__init__(id=id)
         self.sort_by = "cpu"  # or "mem"
+        self.filter_text = ""
 
     def compose(self) -> ComposeResult:
+        yield Input(placeholder="filter processes… (esc clears)", id="proc-filter")
         yield DataTable(id="proc-table", zebra_stripes=True, cursor_type="row")
+
+    def show_filter(self) -> None:
+        inp = self.query_one("#proc-filter", Input)
+        inp.display = True
+        inp.focus()
+
+    def hide_filter(self) -> None:
+        inp = self.query_one("#proc-filter", Input)
+        inp.value = ""
+        inp.display = False
+        self.filter_text = ""
+        self.query_one("#proc-table", DataTable).focus()
+        self.post_message(self.FilterChanged())
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self.filter_text = event.value
+        self.post_message(self.FilterChanged())
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.query_one("#proc-table", DataTable).focus()
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "escape" and self.query_one("#proc-filter", Input).has_focus:
+            event.stop()
+            self.hide_filter()
 
     def on_mount(self) -> None:
         table: DataTable = self.query_one("#proc-table", DataTable)
@@ -325,10 +416,27 @@ class MonMonApp(App):
     MemPanel { height: auto; min-height: 8; }
     ProcPanel { height: 1fr; }
     SummaryBar { height: 1; padding: 0 1; background: $panel; }
+    #proc-filter { display: none; height: 3; }
+    HelpScreen, ConfirmKillScreen { align: center middle; }
+    #help-body, #confirm-body {
+        width: auto; max-width: 72; height: auto;
+        padding: 1 2; background: $surface; border: round $primary;
+    }
+    Screen.-narrow #top-row { layout: vertical; }
+    Screen.-narrow #left { width: 1fr; height: 45%; }
+    Screen.-narrow #right { width: 1fr; height: 1fr; }
     """
+    HORIZONTAL_BREAKPOINTS = [(0, "-narrow"), (100, "-wide")]
+    # Never auto-focus the hidden filter Input — letters would type into it
+    # invisibly instead of reaching the app bindings.
+    AUTO_FOCUS = "#proc-table"
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("s", "toggle_sort", "Sort cpu/mem"),
+        Binding("slash", "filter_procs", "Filter", key_display="/"),
+        Binding("k", "kill_proc", "Kill"),
+        Binding("p", "toggle_pause", "Pause"),
+        Binding("question_mark", "help", "Help", key_display="?"),
         Binding("ctrl+c", "quit", "Quit", show=False),
     ]
 
@@ -340,6 +448,7 @@ class MonMonApp(App):
         self._ane_ceiling_mw = 8000.0
         self._last_error = 0.0
         self._stream_dead = False
+        self._paused = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -392,7 +501,7 @@ class MonMonApp(App):
                 timeout=10,
             )
 
-        if drained is None:
+        if drained is None or self._paused:
             return
         ane_mw = drained.ane_power_mw or 0.0
         self._ane_ceiling_mw = max(self._ane_ceiling_mw, ane_mw)
@@ -409,18 +518,58 @@ class MonMonApp(App):
         self.query_one("#summary", SummaryBar).sample = drained
 
     def _poll_procs(self) -> None:
+        if self._paused:
+            return
         panel = self.query_one("#proc", ProcPanel)
-        panel.update_rows(proc_snapshot(limit=18, by=panel.sort_by))
+        panel.update_rows(proc_snapshot(limit=18, by=panel.sort_by, contains=panel.filter_text))
 
         vm = psutil.virtual_memory()
         swap = psutil.swap_memory()
         self.history.ram_used.append(vm.percent / 100.0)
         self.query_one("#mem", MemPanel).mem = (vm, swap)
 
+    def on_proc_panel_filter_changed(self, message: ProcPanel.FilterChanged) -> None:
+        self._poll_procs()
+
     def action_toggle_sort(self) -> None:
         panel = self.query_one("#proc", ProcPanel)
         panel.sort_by = "mem" if panel.sort_by == "cpu" else "cpu"
         self._poll_procs()
+
+    def action_filter_procs(self) -> None:
+        self.query_one("#proc", ProcPanel).show_filter()
+
+    def action_toggle_pause(self) -> None:
+        self._paused = not self._paused
+        self.query_one("#summary", SummaryBar).paused = self._paused
+
+    def action_help(self) -> None:
+        self.push_screen(HelpScreen())
+
+    def action_kill_proc(self) -> None:
+        table = self.query_one("#proc-table", DataTable)
+        if not table.row_count:
+            return
+        try:
+            key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
+        except CellDoesNotExist:
+            return
+        pid = int(key.value or -1)
+        name = str(table.get_row(key)[1])
+
+        def _done(confirmed: bool | None) -> None:
+            if not confirmed:
+                return
+            try:
+                psutil.Process(pid).terminate()
+                self.notify(f"sent SIGTERM to {name} ({pid})", timeout=4)
+            except psutil.NoSuchProcess:
+                self.notify(f"{name} ({pid}) already exited", severity="warning", timeout=4)
+            except psutil.AccessDenied:
+                self.notify(f"permission denied for {name} ({pid})", severity="error", timeout=4)
+            self._poll_procs()
+
+        self.push_screen(ConfirmKillScreen(pid, name), _done)
 
     def on_unmount(self) -> None:
         self.reader.stop()

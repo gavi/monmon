@@ -77,6 +77,32 @@ def test_freq_unit_heuristic() -> None:
     assert parse_sample(plistlib.dumps(doc)).gpu_freq_mhz == pytest.approx(888.0)
 
 
+def test_down_ratio_counts_as_inactive() -> None:
+    """A power-gated core reads idle=0/down=1 on macOS 27 — that is 0% active."""
+    doc = {
+        "elapsed_ns": 1,
+        "processor": {
+            "clusters": [
+                {
+                    "name": "P1-Cluster",
+                    "freq_hz": 0,
+                    "idle_ratio": 0.0,
+                    "cpus": [
+                        {"cpu": 10, "freq_hz": 0, "idle_ratio": 0.0, "down_ratio": 1.0},
+                        {"cpu": 11, "freq_hz": 0, "idle_ratio": 0.2, "down_ratio": 0.7},
+                    ],
+                }
+            ]
+        },
+        "gpu": {},
+    }
+    s = parse_sample(plistlib.dumps(doc))
+    cores = s.clusters[0].cores
+    assert cores[0].active == 0.0
+    assert cores[1].active == pytest.approx(0.1)
+    assert s.clusters[0].active == pytest.approx(0.05)
+
+
 def test_cluster_active_is_core_mean() -> None:
     doc = {
         "elapsed_ns": 1,
