@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.0 — 2026-07-10
+
+### Added
+- `/` filters the process table by name as you type (esc clears)
+- `k` kills the selected process, with a confirmation prompt
+- `p` pauses / resumes sampling; `?` opens a help screen
+- The layout stacks vertically on terminals narrower than 100 columns
+- Animated demo GIF and refreshed screenshot in the README
+
+### Fixed
+- macOS 27 power-gated ("down") cores no longer read 100% active at 0 MHz —
+  `down_ratio` now counts as inactive time
+- Keybindings no longer get swallowed by the hidden filter input on startup
+- Cluster headers render on one line instead of wrapping at narrow widths
+- CI actions bumped off the deprecated Node 20 runtime
+
 ## 0.2.0 — 2026-07-10
 
 ### Added
