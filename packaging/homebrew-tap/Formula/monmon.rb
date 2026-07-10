@@ -3,8 +3,8 @@ class Monmon < Formula
 
   desc "macOS silicon monitor (E/P cores, GPU, NPU) with a TUI"
   homepage "https://github.com/gavi/monmon"
-  url "https://files.pythonhosted.org/packages/f7/34/b3e0e4c7e7916534910e0ed92cb2307732009bdd198e1a0fcfe74c56e860/monmon-0.1.0.tar.gz"
-  sha256 "c516b00d131b38a6cd054cd58b5190daf6b96071a7b70ff9dc4d76588d089a9f"
+  url "https://files.pythonhosted.org/packages/9b/3b/7d43167aa886687ac329cf37af36ef621d444b4d0c2f89f5293d9383eb96/monmon-0.2.0.tar.gz"
+  sha256 "76db11b1b67f3937f7ebac6778ab37fc13a444f2f13ee4a75a583f3fb73655dc"
   license "MIT"
 
   depends_on "python@3.12"
@@ -77,6 +77,11 @@ class Monmon < Formula
       cache your credential in the shell first:
 
         sudo -v && monmon
+
+      To skip the prompt permanently, allow powermetrics (and only it)
+      through sudo without a password — see the README:
+
+        https://github.com/gavi/monmon#optional-skip-the-password-prompt
     EOS
   end
 
