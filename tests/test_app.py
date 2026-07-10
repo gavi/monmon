@@ -196,8 +196,11 @@ async def test_live_powermetrics_end_to_end() -> None:
         assert app.reader.is_alive()
         assert not app._stream_dead
         assert cpu.sample is not None, "no live sample arrived within ~8s"
-        assert cpu.sample.clusters
         assert app.history.cpu_active
+        # virtualized runners (VirtualMac2,1 on GitHub Actions) stream samples
+        # but expose no cluster telemetry — assert content on real hardware only
+        if not (cpu.sample.hw_model or "").startswith("Virtual"):
+            assert cpu.sample.clusters
 
 
 @pytest.mark.skipif(shutil.which("powermetrics") is None, reason="needs macOS powermetrics")
