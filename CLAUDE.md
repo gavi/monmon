@@ -28,6 +28,14 @@ uv run monmon              # launch TUI
 uv run monmon -i 500       # 500 ms samples
 ```
 
+Checks (run all three before handing work back; CI enforces them):
+
+```sh
+uv run pytest              # parser fixtures + headless Textual UI tests
+uv run ruff check .        # lint
+uv run mypy                # typecheck
+```
+
 There is **no build step for production** — this is a CLI installed via uv.
 Do not run `npm run build` or any bundler here.
 
@@ -40,6 +48,9 @@ src/monmon/
   app.py        # Textual App + widgets
   power.py      # powermetrics subprocess, NUL-delimited plist parser
   procs.py     # psutil process snapshot
+tests/
+  fixtures/     # recorded powermetrics plist samples; every *.plist is
+                # auto-parsed by the invariant test — add captures freely
 ```
 
 Entry point wired via `[project.scripts] monmon = "monmon.__main__:main"` in
@@ -64,8 +75,9 @@ Entry point wired via `[project.scripts] monmon = "monmon.__main__:main"` in
   attributes updated from a polling interval that drains the sample queue.
   Keep the powermetrics parse thread off the UI thread.
 - **ANE has no residency counter**: we approximate ANE utilization from power
-  draw with an 8 W ceiling. Don't pretend we have an active-ratio — document
-  the approximation if you change the ceiling.
+  draw against a ceiling that starts at 8 W and self-calibrates up to the
+  session's peak draw. Don't pretend we have an active-ratio — document the
+  approximation if you change the ceiling scheme.
 - **Process data comes from psutil, not powermetrics**: powermetrics' task
   sampler is inconsistent across macOS versions and its plist output for
   per-task data is fragile. Keep the two data sources separate.
@@ -76,17 +88,23 @@ Entry point wired via `[project.scripts] monmon = "monmon.__main__:main"` in
 - Do not add Co-Authored-By lines to commits (per user global preferences).
 - Keep the feature set tight: this is a monitor, not a profiler. Resist the
   urge to add thermal/battery/network sampling unless asked — the stack is
-  meant to stay under ~500 lines.
+  meant to stay under ~1000 lines.
 - Do not introduce alternate permission schemes (helper tools, launchd jobs,
   setuid binaries) without explicit sign-off. The current sudo-in-shell model
   is intentional: simple, auditable, standard.
 
 ## Known rough edges
 
-- The ANE power ceiling (8 W) is a guess based on M-series chip datasheets.
-  Tune per-chip if you have ground truth.
+- The ANE power ceiling starts at an 8 W guess and self-calibrates to the
+  session's observed peak. A per-chip table keyed on `hw_model` would beat
+  both — add one only with measured ground truth, not datasheet guesses.
 - On some macOS versions, cluster names vary (`E-Cluster`, `E0-Cluster`,
   `ECPU`). `_cluster_kind` matches on the first letter; broaden if you see
   `?` kinds in the TUI.
+- macOS 27 quirks (see `tests/fixtures/mac15-9-m3max-macos27.plist`): GPU
+  `freq_hz` actually contains MHz (`_freq_mhz` normalizes by magnitude);
+  `cpu_power`/`cpu_energy` report 0 even under load, so the CPU title shows
+  0 mW honestly; cluster-level `idle_ratio` reads 0 whenever anything runs,
+  which is why `parse_sample` derives cluster active from the core mean.
 - `sudo -v` from a subprocess occasionally fails on TouchID-only setups. The
   README documents the `sudo -v && uv run monmon` workaround.

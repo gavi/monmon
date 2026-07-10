@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import queue
 import time
+from collections import deque
+from collections.abc import Iterable
 
 import psutil
 from rich.console import Group
@@ -15,18 +17,61 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.widgets import DataTable, Footer, Header, Static
+from textual.widgets.data_table import CellDoesNotExist
 
 from .power import (
     ClusterSample,
-    PowerSample,
     PowermetricsError,
     PowermetricsReader,
-    ensure_sudo_cached,
+    PowerSample,
 )
 from .procs import snapshot as proc_snapshot
 
-
 BAR_CHARS = " ▏▎▍▌▋▊▉█"
+SPARK_CHARS = "▁▂▃▄▅▆▇█"
+
+
+def _load_color(ratio: float) -> str:
+    if ratio < 0.33:
+        return "green"
+    if ratio < 0.66:
+        return "yellow"
+    return "red"
+
+
+def spark(values: Iterable[float], width: int = 24, style: str | None = None) -> Text:
+    """Render the most recent `width` values (each 0..1) as a sparkline.
+
+    Colored per-value by load unless a fixed `style` is given.
+    """
+    vals = list(values)[-width:]
+    text = Text(" " * (width - len(vals)))
+    for v in vals:
+        v = max(0.0, min(1.0, v))
+        ch = SPARK_CHARS[round(v * (len(SPARK_CHARS) - 1))]
+        text.append(ch, style=style or _load_color(v))
+    return text
+
+
+class History:
+    """Rolling per-metric samples feeding the sparklines (most recent last)."""
+
+    def __init__(self, maxlen: int = 60) -> None:
+        self.cpu_active: deque[float] = deque(maxlen=maxlen)
+        self.gpu_active: deque[float] = deque(maxlen=maxlen)
+        self.ane_ratio: deque[float] = deque(maxlen=maxlen)
+        self.package_mw: deque[float] = deque(maxlen=maxlen)
+        self.ram_used: deque[float] = deque(maxlen=maxlen)
+
+
+def overall_cpu_active(sample: PowerSample) -> float:
+    """Mean active-residency across all cores (clusters as fallback)."""
+    cores = [core for cluster in sample.clusters for core in cluster.cores]
+    if cores:
+        return sum(c.active for c in cores) / len(cores)
+    if sample.clusters:
+        return sum(c.active for c in sample.clusters) / len(sample.clusters)
+    return 0.0
 
 
 def hbar(ratio: float, width: int = 20) -> Text:
@@ -39,14 +84,7 @@ def hbar(ratio: float, width: int = 20) -> Text:
     if full < width:
         bar += BAR_CHARS[partial_idx]
         bar += " " * (width - full - 1)
-    # color by load
-    if ratio < 0.33:
-        color = "green"
-    elif ratio < 0.66:
-        color = "yellow"
-    else:
-        color = "red"
-    return Text(bar, style=color)
+    return Text(bar, style=_load_color(ratio))
 
 
 def fmt_mhz(mhz: float) -> str:
@@ -74,6 +112,10 @@ def cluster_label(c: ClusterSample) -> str:
 class CpuPanel(Static):
     sample: reactive[PowerSample | None] = reactive(None)
 
+    def __init__(self, history: History, id: str | None = None) -> None:
+        super().__init__(id=id)
+        self.history = history
+
     def render(self):
         if self.sample is None:
             return Panel(Text("waiting for samples…", style="dim"), title="CPU", border_style="blue")
@@ -100,12 +142,28 @@ class CpuPanel(Static):
             groups.append(t)
             groups.append(Text(""))
 
+        if self.history.cpu_active:
+            t = Table.grid(padding=(0, 1))
+            t.add_column(justify="right", style="dim", min_width=6)
+            t.add_column(min_width=22)
+            t.add_column(justify="right", min_width=8)
+            t.add_row(
+                "hist",
+                spark(self.history.cpu_active, 24),
+                f"{self.history.cpu_active[-1] * 100:5.1f}%",
+            )
+            groups.append(t)
+
         title = f"CPU · {fmt_mw(self.sample.cpu_power_mw)}"
         return Panel(Group(*groups), title=title, border_style="blue")
 
 
 class GpuPanel(Static):
     sample: reactive[PowerSample | None] = reactive(None)
+
+    def __init__(self, history: History, id: str | None = None) -> None:
+        super().__init__(id=id)
+        self.history = history
 
     def render(self):
         if self.sample is None:
@@ -118,21 +176,27 @@ class GpuPanel(Static):
         t.add_row("active", hbar(s.gpu_active, 28), f"{s.gpu_active * 100:5.1f}%")
         t.add_row("freq", Text(fmt_mhz(s.gpu_freq_mhz)), "")
         t.add_row("power", Text(fmt_mw(s.gpu_power_mw)), "")
+        t.add_row("hist", spark(self.history.gpu_active, 28), "")
         return Panel(t, title="GPU", border_style="green")
 
 
 class AnePanel(Static):
     sample: reactive[PowerSample | None] = reactive(None)
+    ceiling_mw: reactive[float] = reactive(8000.0)
+
+    def __init__(self, history: History, id: str | None = None) -> None:
+        super().__init__(id=id)
+        self.history = history
 
     def render(self):
         if self.sample is None:
             return Panel(Text("waiting…", style="dim"), title="NPU (ANE)", border_style="magenta")
         s = self.sample
         # ANE has no active-residency counter exposed by powermetrics, so we
-        # approximate "in use" from power draw. Peak varies by chip; use a
-        # conservative 8 W ceiling so the bar reacts without maxing out.
+        # approximate "in use" from power draw. The ceiling starts at a
+        # conservative 8 W and self-calibrates up to the session's peak draw.
         mw = s.ane_power_mw or 0.0
-        ratio = min(1.0, mw / 8000.0)
+        ratio = min(1.0, mw / self.ceiling_mw) if self.ceiling_mw else 0.0
         t = Table.grid(padding=(0, 1))
         t.add_column(justify="right", style="dim", min_width=10)
         t.add_column(min_width=24)
@@ -141,12 +205,17 @@ class AnePanel(Static):
         status = Text("● in use", style="bold magenta") if in_use else Text("○ idle", style="dim")
         t.add_row("state", status, "")
         t.add_row("power", hbar(ratio, 28), fmt_mw(s.ane_power_mw))
+        t.add_row("hist", spark(self.history.ane_ratio, 28), "")
         return Panel(t, title="NPU (Apple Neural Engine)", border_style="magenta")
 
 
 class SummaryBar(Static):
     sample: reactive[PowerSample | None] = reactive(None)
-    sudo_ok: reactive[bool] = reactive(True)
+    stream_alive: reactive[bool] = reactive(True)
+
+    def __init__(self, history: History, id: str | None = None) -> None:
+        super().__init__(id=id)
+        self.history = history
 
     def render(self):
         left = Text()
@@ -157,29 +226,91 @@ class SummaryBar(Static):
 
         if self.sample:
             left.append(f"package: {fmt_mw(self.sample.package_power_mw)}", style="yellow")
-        if not self.sudo_ok:
-            left.append("  sudo credentials expired — restart", style="bold red")
+            peak = max(self.history.package_mw, default=0.0)
+            if peak > 0:
+                left.append("  ")
+                left.append_text(spark((v / peak for v in self.history.package_mw), 20, style="yellow"))
+        if not self.stream_alive:
+            left.append("  powermetrics ended — quit and rerun: sudo -v && monmon", style="bold red")
         return left
 
 
+class MemPanel(Static):
+    mem: reactive[tuple | None] = reactive(None)
+
+    def __init__(self, history: History, id: str | None = None) -> None:
+        super().__init__(id=id)
+        self.history = history
+
+    def render(self):
+        if self.mem is None:
+            return Panel(Text("waiting…", style="dim"), title="Memory", border_style="yellow")
+        vm, swap = self.mem
+        gib = 1024**3
+        used_gb = (vm.total - vm.available) / gib
+        t = Table.grid(padding=(0, 1))
+        t.add_column(justify="right", style="dim", min_width=10)
+        t.add_column(min_width=24)
+        t.add_column(justify="right", min_width=8)
+        t.add_row("ram", hbar(vm.percent / 100.0, 28), f"{vm.percent:5.1f}%")
+        t.add_row("", Text(f"{used_gb:.1f} / {vm.total / gib:.1f} GB used", style="dim"), "")
+        if swap.total:
+            t.add_row(
+                "swap",
+                hbar(swap.percent / 100.0, 28),
+                f"{swap.used / gib:5.1f} GB",
+            )
+        else:
+            t.add_row("swap", Text("none", style="dim"), "")
+        t.add_row("hist", spark(self.history.ram_used, 28), "")
+        return Panel(t, title="Memory", border_style="yellow")
+
+
 class ProcPanel(Static):
+    def __init__(self, id: str | None = None) -> None:
+        super().__init__(id=id)
+        self.sort_by = "cpu"  # or "mem"
+
     def compose(self) -> ComposeResult:
         yield DataTable(id="proc-table", zebra_stripes=True, cursor_type="row")
 
     def on_mount(self) -> None:
         table: DataTable = self.query_one("#proc-table", DataTable)
-        table.add_columns("PID", "Process", "CPU %", "Mem MB")
+        cols = table.add_columns("PID", "Process", "CPU %", "Mem MB")
+        self._name_col, self._cpu_col, self._mem_col = cols[1:]
 
     def update_rows(self, rows) -> None:
+        """Diff rows into the table keyed by PID so cursor and scroll survive."""
         table: DataTable = self.query_one("#proc-table", DataTable)
-        table.clear()
+
+        cursor_key = None
+        if table.row_count:
+            try:
+                cursor_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
+            except CellDoesNotExist:
+                pass
+
+        alive = {str(r.pid) for r in rows}
+        for gone in [k for k in table.rows if k.value not in alive]:
+            table.remove_row(gone)
+
         for r in rows:
-            table.add_row(
-                str(r.pid),
-                r.name[:32],
-                f"{r.cpu_percent:6.1f}",
-                f"{r.mem_mb:8.1f}",
-            )
+            key = str(r.pid)
+            name = r.name[:32]
+            cpu = f"{r.cpu_percent:6.1f}"
+            mem = f"{r.mem_mb:8.1f}"
+            if key in table.rows:
+                table.update_cell(key, self._name_col, name, update_width=True)
+                table.update_cell(key, self._cpu_col, cpu)
+                table.update_cell(key, self._mem_col, mem)
+            else:
+                table.add_row(key, name, cpu, mem, key=key)
+
+        sort_col = self._mem_col if self.sort_by == "mem" else self._cpu_col
+        table.sort(sort_col, key=float, reverse=True)
+
+        if cursor_key is not None and cursor_key.value in alive:
+            table.move_cursor(row=table.get_row_index(cursor_key))
 
 
 class MonMonApp(App):
@@ -191,11 +322,13 @@ class MonMonApp(App):
     CpuPanel { height: 1fr; }
     GpuPanel { height: auto; min-height: 8; }
     AnePanel { height: auto; min-height: 8; }
+    MemPanel { height: auto; min-height: 8; }
     ProcPanel { height: 1fr; }
     SummaryBar { height: 1; padding: 0 1; background: $panel; }
     """
     BINDINGS = [
         Binding("q", "quit", "Quit"),
+        Binding("s", "toggle_sort", "Sort cpu/mem"),
         Binding("ctrl+c", "quit", "Quit", show=False),
     ]
 
@@ -203,17 +336,21 @@ class MonMonApp(App):
         super().__init__()
         self.interval_ms = interval_ms
         self.reader = PowermetricsReader(interval_ms=interval_ms)
+        self.history = History()
+        self._ane_ceiling_mw = 8000.0
         self._last_error = 0.0
+        self._stream_dead = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        yield SummaryBar(id="summary")
+        yield SummaryBar(self.history, id="summary")
         with Horizontal(id="top-row"):
             with Vertical(id="left"):
-                yield CpuPanel(id="cpu")
+                yield CpuPanel(self.history, id="cpu")
             with Vertical(id="right"):
-                yield GpuPanel(id="gpu")
-                yield AnePanel(id="ane")
+                yield GpuPanel(self.history, id="gpu")
+                yield AnePanel(self.history, id="ane")
+                yield MemPanel(self.history, id="mem")
                 yield ProcPanel(id="proc")
         yield Footer()
 
@@ -246,18 +383,44 @@ class MonMonApp(App):
             except queue.Empty:
                 pass
 
+        if not self._stream_dead and not self.reader.is_alive():
+            self._stream_dead = True
+            self.query_one("#summary", SummaryBar).stream_alive = False
+            self.notify(
+                "powermetrics stream ended — quit and rerun: sudo -v && monmon",
+                severity="error",
+                timeout=10,
+            )
+
         if drained is None:
             return
+        ane_mw = drained.ane_power_mw or 0.0
+        self._ane_ceiling_mw = max(self._ane_ceiling_mw, ane_mw)
+        self.history.cpu_active.append(overall_cpu_active(drained))
+        self.history.gpu_active.append(drained.gpu_active)
+        self.history.ane_ratio.append(min(1.0, ane_mw / self._ane_ceiling_mw))
+        self.history.package_mw.append(drained.package_power_mw or 0.0)
+
         self.query_one("#cpu", CpuPanel).sample = drained
         self.query_one("#gpu", GpuPanel).sample = drained
-        self.query_one("#ane", AnePanel).sample = drained
-        summary = self.query_one("#summary", SummaryBar)
-        summary.sample = drained
-        summary.sudo_ok = ensure_sudo_cached()
+        ane = self.query_one("#ane", AnePanel)
+        ane.ceiling_mw = self._ane_ceiling_mw
+        ane.sample = drained
+        self.query_one("#summary", SummaryBar).sample = drained
 
     def _poll_procs(self) -> None:
-        rows = proc_snapshot(limit=18)
-        self.query_one("#proc", ProcPanel).update_rows(rows)
+        panel = self.query_one("#proc", ProcPanel)
+        panel.update_rows(proc_snapshot(limit=18, by=panel.sort_by))
+
+        vm = psutil.virtual_memory()
+        swap = psutil.swap_memory()
+        self.history.ram_used.append(vm.percent / 100.0)
+        self.query_one("#mem", MemPanel).mem = (vm, swap)
+
+    def action_toggle_sort(self) -> None:
+        panel = self.query_one("#proc", ProcPanel)
+        panel.sort_by = "mem" if panel.sort_by == "cpu" else "cpu"
+        self._poll_procs()
 
     def on_unmount(self) -> None:
         self.reader.stop()

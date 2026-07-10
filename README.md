@@ -43,6 +43,18 @@ uv sync
 uv run monmon
 ```
 
+Checks (all run headless, no sudo needed — CI runs the same three):
+
+```sh
+uv run pytest        # parser fixtures + Textual UI tests
+uv run ruff check .  # lint
+uv run mypy          # typecheck
+```
+
+Parser tests run against recorded `powermetrics` samples in
+`tests/fixtures/` — contributions of captures from other chips and macOS
+versions are welcome; see `tests/fixtures/README.md`.
+
 ## Run
 
 ```sh
@@ -63,7 +75,22 @@ in the shell first:
 sudo -v && monmon
 ```
 
-Quit with `q` or `ctrl-c`.
+Keys: `s` toggles the process table between CPU and memory sort; `q` or
+`ctrl-c` quits.
+
+### Optional: skip the password prompt
+
+`powermetrics` is read-only telemetry, so it is reasonable to allow it — and
+only it — through sudo without a password:
+
+```sh
+echo "$(whoami) ALL=(root) NOPASSWD: /usr/bin/powermetrics" | sudo tee /etc/sudoers.d/powermetrics
+sudo chmod 440 /etc/sudoers.d/powermetrics
+sudo visudo -c
+```
+
+monmon detects the rule and starts without prompting. Undo it any time with
+`sudo rm /etc/sudoers.d/powermetrics`.
 
 ## Upgrade / uninstall
 
@@ -76,14 +103,19 @@ brew untap gavi/monmon                 # drop the tap too
 ## What you see
 
 - **CPU panel**: every E-core and P-core cluster with per-core active-residency
-  bars and current frequency. E-clusters render in cyan, P-clusters in magenta.
-- **GPU panel**: active residency, frequency, and power draw.
+  bars and current frequency, plus a rolling overall-load sparkline.
+  E-clusters render in cyan, P-clusters in magenta.
+- **GPU panel**: active residency, frequency, power draw, and history.
 - **NPU panel**: Apple Neural Engine power. `powermetrics` doesn't expose an
   "active" counter for ANE, so monmon treats any non-trivial power draw as
-  "in use" and scales the bar against an 8 W ceiling.
-- **Process table**: top processes by CPU from `psutil`. (powermetrics' task
-  sampler is unreliable across macOS versions, so we use psutil for the
-  "what's running?" view.)
+  "in use" and scales the bar against an 8 W ceiling that self-calibrates
+  upward if your chip draws more.
+- **Memory panel**: RAM used vs total, swap, and history.
+- **Process table**: top processes by CPU or memory from `psutil` — press
+  `s` to toggle the sort key. (powermetrics' task sampler is unreliable
+  across macOS versions, so we use psutil for the "what's running?" view.)
+- **Summary bar**: chip model, core counts, and package power with a
+  sparkline scaled to the session's peak.
 
 ## Data source
 

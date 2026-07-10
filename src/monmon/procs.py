@@ -34,7 +34,8 @@ def _prime() -> None:
     _primed = True
 
 
-def snapshot(limit: int = 20) -> list[ProcInfo]:
+def snapshot(limit: int = 20, by: str = "cpu") -> list[ProcInfo]:
+    """Top `limit` processes sorted by `by` ("cpu" or "mem"), descending."""
     if not _primed:
         _prime()
         return []
@@ -55,5 +56,5 @@ def snapshot(limit: int = 20) -> list[ProcInfo]:
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
 
-    rows.sort(key=lambda r: r.cpu_percent, reverse=True)
+    rows.sort(key=(lambda r: r.mem_mb) if by == "mem" else (lambda r: r.cpu_percent), reverse=True)
     return rows[:limit]

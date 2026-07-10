@@ -11,11 +11,10 @@ from __future__ import annotations
 import plistlib
 import queue
 import shutil
-import signal
 import subprocess
 import threading
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Iterable
 
 
 @dataclass
@@ -51,10 +50,17 @@ class PowermetricsError(RuntimeError):
     pass
 
 
-def _hz_to_mhz(v: float | int | None) -> float:
+def _freq_mhz(v: float | int | None) -> float:
+    """Normalize a frequency reading to MHz.
+
+    `freq_hz` holds Hz on most macOS versions, but some blocks report MHz in
+    the same key (e.g. the GPU on macOS 27). No real clock falls between
+    100 kHz-as-Hz and 100 GHz-as-MHz, so split on magnitude.
+    """
     if not v:
         return 0.0
-    return float(v) / 1_000_000.0
+    v = float(v)
+    return v if v < 1e5 else v / 1e6
 
 
 def _active_from_idle(idle: float | int | None) -> float:
@@ -86,27 +92,36 @@ def parse_sample(plist_bytes: bytes) -> PowerSample:
         cores = [
             CoreSample(
                 cpu_id=int(cpu.get("cpu", -1)),
-                freq_mhz=_hz_to_mhz(cpu.get("freq_hz")),
+                freq_mhz=_freq_mhz(cpu.get("freq_hz")),
                 active=_active_from_idle(cpu.get("idle_ratio")),
             )
             for cpu in (c.get("cpus") or [])
         ]
+        # Cluster-level idle_ratio measures whole-cluster power-gating, which
+        # reads ~0 under any load; the per-core mean matches the "avg" label.
+        if cores:
+            active = sum(core.active for core in cores) / len(cores)
+        else:
+            active = _active_from_idle(c.get("idle_ratio"))
         clusters.append(
             ClusterSample(
                 name=name,
                 kind=_cluster_kind(name),
-                freq_mhz=_hz_to_mhz(c.get("freq_hz")),
-                active=_active_from_idle(c.get("idle_ratio")),
+                freq_mhz=_freq_mhz(c.get("freq_hz")),
+                active=active,
                 cores=cores,
             )
         )
 
     gpu = doc.get("gpu", {}) or {}
-    gpu_freq = _hz_to_mhz(gpu.get("freq_hz"))
+    gpu_freq = _freq_mhz(gpu.get("freq_hz"))
     gpu_active = _active_from_idle(gpu.get("idle_ratio"))
 
-    # Power fields are in mW but keys vary across macOS versions.
-    def _pw(*keys: str) -> float | None:
+    elapsed_ns = int(doc.get("elapsed_ns", 0) or 0)
+
+    # Keys vary across macOS versions: some report power in mW, others report
+    # energy in mJ accumulated over the sample window.
+    def _num(*keys: str) -> float | None:
         for src in (processor, doc):
             for k in keys:
                 v = src.get(k)
@@ -117,15 +132,27 @@ def parse_sample(plist_bytes: bytes) -> PowerSample:
                         pass
         return None
 
+    def _mw(power_keys: tuple[str, ...], energy_keys: tuple[str, ...]) -> float | None:
+        mw = _num(*power_keys)
+        if mw is not None:
+            return mw
+        mj = _num(*energy_keys)
+        if mj is not None and elapsed_ns > 0:
+            return mj * 1e9 / elapsed_ns  # mJ over the window -> mW
+        return None
+
     return PowerSample(
-        elapsed_ns=int(doc.get("elapsed_ns", 0) or 0),
+        elapsed_ns=elapsed_ns,
         clusters=clusters,
         gpu_freq_mhz=gpu_freq,
         gpu_active=gpu_active,
-        gpu_power_mw=_pw("gpu_power"),
-        ane_power_mw=_pw("ane_power", "ane_energy"),
-        cpu_power_mw=_pw("cpu_power"),
-        package_power_mw=_pw("package_power", "combined_power"),
+        gpu_power_mw=_mw(("gpu_power",), ("gpu_energy",)),
+        ane_power_mw=_mw(("ane_power",), ("ane_energy",)),
+        cpu_power_mw=_mw(("cpu_power",), ("cpu_energy",)),
+        package_power_mw=_mw(
+            ("package_power", "combined_power"),
+            ("package_energy", "combined_energy"),
+        ),
         hw_model=doc.get("hw_model"),
     )
 
@@ -182,7 +209,9 @@ class PowermetricsReader:
 
         self._thread = threading.Thread(target=self._run, name="powermetrics-reader", daemon=True)
         self._thread.start()
-        self._stderr_thread = threading.Thread(target=self._drain_stderr, name="powermetrics-stderr", daemon=True)
+        self._stderr_thread = threading.Thread(
+            target=self._drain_stderr, name="powermetrics-stderr", daemon=True
+        )
         self._stderr_thread.start()
 
     def _run(self) -> None:
@@ -211,6 +240,10 @@ class PowermetricsReader:
         finally:
             self._stop.set()
 
+    def is_alive(self) -> bool:
+        """True while the powermetrics subprocess is still running."""
+        return self._proc is not None and self._proc.poll() is None
+
     def _drain_stderr(self) -> None:
         assert self._proc is not None and self._proc.stderr is not None
         for line in iter(self._proc.stderr.readline, b""):
@@ -228,21 +261,30 @@ class PowermetricsReader:
         self._stop.set()
         if self._proc and self._proc.poll() is None:
             # powermetrics runs as root via sudo; SIGTERM from our PID isn't
-            # permitted, so we shell out through sudo to send the signal.
+            # permitted, so we shell out through sudo to send the signal. If
+            # sudo can't kill without a password (e.g. a NOPASSWD rule scoped
+            # to powermetrics only), fail quietly — powermetrics exits on
+            # SIGPIPE once our end of the pipe closes at process exit.
             try:
-                subprocess.run(
+                r = subprocess.run(
                     ["sudo", "-n", "kill", "-TERM", str(self._proc.pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                     check=False,
                     timeout=2,
                 )
             except Exception:  # noqa: BLE001
-                pass
+                return
+            if r.returncode != 0:
+                return
             try:
                 self._proc.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 try:
                     subprocess.run(
                         ["sudo", "-n", "kill", "-KILL", str(self._proc.pid)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
                         check=False,
                         timeout=2,
                     )
@@ -250,11 +292,18 @@ class PowermetricsReader:
                     pass
 
 
-def ensure_sudo_cached() -> bool:
-    """Return True if `sudo -n` currently works without a password prompt."""
+def can_run_powermetrics() -> bool:
+    """True if `sudo -n powermetrics` will start without a password prompt.
+
+    Satisfied by cached sudo credentials or by a NOPASSWD sudoers rule
+    scoped to powermetrics (see README) — `sudo -l <cmd>` checks both.
+    """
+    pm = shutil.which("powermetrics")
+    if pm is None:
+        return False
     try:
         r = subprocess.run(
-            ["sudo", "-n", "true"],
+            ["sudo", "-n", "-l", pm],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=2,

@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>hw_model</key><string>Mac14,10</string>
+  <key>elapsed_ns</key><integer>1003512345</integer>
+  <key>processor</key>
+  <dict>
+    <key>clusters</key>
+    <array>
+      <dict>
+        <key>name</key><string>E-Cluster</string>
+        <key>freq_hz</key><real>1250000000</real>
+        <key>idle_ratio</key><real>0.72</real>
+        <key>cpus</key>
+        <array>
+          <dict><key>cpu</key><integer>0</integer><key>freq_hz</key><real>1120000000</real><key>idle_ratio</key><real>0.65</real></dict>
+          <dict><key>cpu</key><integer>1</integer><key>freq_hz</key><real>1310000000</real><key>idle_ratio</key><real>0.79</real></dict>
+          <dict><key>cpu</key><integer>2</integer><key>freq_hz</key><real>1180000000</real><key>idle_ratio</key><real>0.70</real></dict>
+          <dict><key>cpu</key><integer>3</integer><key>freq_hz</key><real>1290000000</real><key>idle_ratio</key><real>0.74</real></dict>
+        </array>
+      </dict>
+      <dict>
+        <key>name</key><string>P0-Cluster</string>
+        <key>freq_hz</key><real>2830000000</real>
+        <key>idle_ratio</key><real>0.44</real>
+        <key>cpus</key>
+        <array>
+          <dict><key>cpu</key><integer>4</integer><key>freq_hz</key><real>3200000000</real><key>idle_ratio</key><real>0.21</real></dict>
+          <dict><key>cpu</key><integer>5</integer><key>freq_hz</key><real>2900000000</real><key>idle_ratio</key><real>0.38</real></dict>
+          <dict><key>cpu</key><integer>6</integer><key>freq_hz</key><real>2600000000</real><key>idle_ratio</key><real>0.55</real></dict>
+          <dict><key>cpu</key><integer>7</integer><key>freq_hz</key><real>2410000000</real><key>idle_ratio</key><real>0.62</real></dict>
+        </array>
+      </dict>
+      <dict>
+        <key>name</key><string>P1-Cluster</string>
+        <key>freq_hz</key><real>1990000000</real>
+        <key>idle_ratio</key><real>0.83</real>
+        <key>cpus</key>
+        <array>
+          <dict><key>cpu</key><integer>8</integer><key>freq_hz</key><real>2010000000</real><key>idle_ratio</key><real>0.80</real></dict>
+          <dict><key>cpu</key><integer>9</integer><key>freq_hz</key><real>1970000000</real><key>idle_ratio</key><real>0.86</real></dict>
+          <dict><key>cpu</key><integer>10</integer><key>freq_hz</key><real>1950000000</real><key>idle_ratio</key><real>0.88</real></dict>
+          <dict><key>cpu</key><integer>11</integer><key>freq_hz</key><real>2030000000</real><key>idle_ratio</key><real>0.78</real></dict>
+        </array>
+      </dict>
+    </array>
+    <key>cpu_power</key><real>1830.5</real>
+    <key>gpu_power</key><real>412.0</real>
+    <key>ane_power</key><real>0</real>
+    <key>combined_power</key><real>2242.5</real>
+  </dict>
+  <key>gpu</key>
+  <dict>
+    <key>freq_hz</key><real>888000000</real>
+    <key>idle_ratio</key><real>0.91</real>
+  </dict>
+</dict>
+</plist>

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>hw_model</key><string>Mac15,6</string>
+  <key>elapsed_ns</key><integer>500000000</integer>
+  <key>cpu_energy</key><integer>600</integer>
+  <key>gpu_energy</key><integer>100</integer>
+  <key>ane_energy</key><integer>250</integer>
+  <key>package_energy</key><integer>1000</integer>
+  <key>processor</key>
+  <dict>
+    <key>clusters</key>
+    <array>
+      <dict>
+        <key>name</key><string>E0-Cluster</string>
+        <key>freq_hz</key><real>1400000000</real>
+        <key>idle_ratio</key><real>0.6</real>
+        <key>cpus</key>
+        <array>
+          <dict><key>cpu</key><integer>0</integer><key>freq_hz</key><real>1350000000</real><key>idle_ratio</key><real>0.55</real></dict>
+          <dict><key>cpu</key><integer>1</integer><key>freq_hz</key><real>1450000000</real><key>idle_ratio</key><real>0.65</real></dict>
+        </array>
+      </dict>
+      <dict>
+        <key>name</key><string>P0-Cluster</string>
+        <key>freq_hz</key><real>3500000000</real>
+        <key>idle_ratio</key><real>0.3</real>
+        <key>cpus</key>
+        <array>
+          <dict><key>cpu</key><integer>2</integer><key>freq_hz</key><real>3600000000</real><key>idle_ratio</key><real>0.2</real></dict>
+          <dict><key>cpu</key><integer>3</integer><key>freq_hz</key><real>3400000000</real><key>idle_ratio</key><real>0.4</real></dict>
+        </array>
+      </dict>
+    </array>
+  </dict>
+  <key>gpu</key>
+  <dict>
+    <key>freq_hz</key><real>1200000000</real>
+    <key>idle_ratio</key><real>0.45</real>
+  </dict>
+</dict>
+</plist>

@@ -6,8 +6,9 @@ import argparse
 import subprocess
 import sys
 
+from . import __version__
 from .app import run
-from .power import ensure_sudo_cached
+from .power import can_run_powermetrics
 
 
 def _prompt_sudo() -> bool:
@@ -31,13 +32,14 @@ def main(argv: list[str] | None = None) -> int:
         type=int, default=1000,
         help="powermetrics sample interval in ms (default: 1000)",
     )
+    parser.add_argument("--version", action="version", version=f"monmon {__version__}")
     args = parser.parse_args(argv)
 
     if sys.platform != "darwin":
         print("monmon only runs on macOS (Apple Silicon recommended).", file=sys.stderr)
         return 2
 
-    if not ensure_sudo_cached():
+    if not can_run_powermetrics():
         if not _prompt_sudo():
             print("Aborted: sudo credential not granted.", file=sys.stderr)
             return 1
