@@ -3,8 +3,8 @@ class Monmon < Formula
 
   desc "macOS silicon monitor (E/P cores, GPU, NPU) with a TUI"
   homepage "https://github.com/gavi/monmon"
-  url "https://files.pythonhosted.org/packages/9b/3b/7d43167aa886687ac329cf37af36ef621d444b4d0c2f89f5293d9383eb96/monmon-0.2.0.tar.gz"
-  sha256 "76db11b1b67f3937f7ebac6778ab37fc13a444f2f13ee4a75a583f3fb73655dc"
+  url "https://files.pythonhosted.org/packages/03/4e/c3630d447c911d87a1dda8fa7c5bd2fbfa0832f559a84dd11ad97dd6f591/monmon-0.3.0.tar.gz"
+  sha256 "8874b1dacee08b71443813fa07d0a01282b247f70f7b975604e429b3d6e0afc9"
   license "MIT"
 
   depends_on "python@3.12"
